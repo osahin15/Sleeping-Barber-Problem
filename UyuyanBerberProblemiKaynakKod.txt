@@ -1,0 +1,193 @@
+﻿#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <semaphore.h>
+
+#define Musteri_MAX 10  //Musteri sınırı
+#define Kesme_MAX 1     //Sac kesme süresi
+
+//Fonksiyon Prototipleme
+
+void* fonk_berber(void * sayi);
+void* fonk_musteri(void * sayi);
+void bekle();
+
+//Semaforlar
+
+sem_t berberler;
+sem_t musteriler;
+sem_t mutex;   //berber koltuguna karşılıklı erişim.
+
+//Degiskenler
+
+int koltukSayisi = 0; //berber koltugu sayisi
+int musteriSayisi = 0; //Musteri Sayisi
+int bosSandalyeSayisi = 0; //bekleme odası bos sandalye sayisi
+int hizmetMusteri = 0; //hizmet alacak musteri kimliği
+int sandalyeSayisi = 0; //bekleme odası sandalye sayisi
+int oturulacakSandalye = 0; //Musterinin oturacagı sandalye
+int * koltuk;   //berber musteri arasındaki koltuk-hizmetalacakmusteri takas için
+
+int main(int argc, char**args)
+{
+    int i ;
+   
+    printf("Musteri sayisi giriniz:\n",musteriSayisi); scanf("%d",&musteriSayisi);
+    printf("Bekleme Salonu Sandalye sayisi giriniz: \n"); scanf("%d",&sandalyeSayisi);
+    printf("Berber Koltuk Sayisini giriniz:\n"); scanf("%d",&koltukSayisi);
+
+    if(musteriSayisi == 0 && koltukSayisi == 0 && sandalyeSayisi ==0)
+    {
+        printf("\n Lütfen Sıfırdan Büyük Degerler giriniz...\n");
+        return EXIT_FAILURE;
+    }
+
+
+    bosSandalyeSayisi = sandalyeSayisi;
+
+    koltuk = (int*)malloc(sizeof(int)*sandalyeSayisi);
+
+    if(musteriSayisi>Musteri_MAX)
+    {
+        printf("Musteri Sinirini Astiniz.. Sinir: %d",Musteri_MAX);
+        return EXIT_FAILURE;
+    }
+
+
+    pthread_t berber[koltukSayisi],musteri[musteriSayisi]; //Thread tanımları
+
+    //Semaforların oluşturulması
+
+    sem_init(&berberler,0,0);
+    sem_init(&musteriler,0,0);
+    sem_init(&mutex,0,1);
+
+
+    
+
+    //Berber Threadleri Oluşturulması
+
+    for(i = 0;i< koltukSayisi;i++)
+    {
+
+        pthread_create(&berber[i],NULL,(void*)fonk_berber,(void*)&i);
+        sleep(1);
+    }
+	//Musteri Threadleri oluşturulması
+
+    for( i = 0; i<musteriSayisi;i++)
+    {
+        pthread_create(&musteri[i],NULL,(void*)fonk_musteri,(void*)&i);
+        bekle(); // Musterileri rastgele aralıklarla oluşturur
+    }
+
+    //berber kapanmadan müsteriler ile ilgilenmesi için Join
+
+    for(i = 0;i<musteriSayisi;i++)
+    {
+        pthread_join(musteri[i],NULL);
+    }
+
+
+     	
+
+    printf("Musteriler Bitti,Berber Dukkani Kapanıyor..\n\n");
+	
+
+
+
+
+    return EXIT_SUCCESS;
+}
+
+void bekle()
+{
+    srand((unsigned int)time(NULL));
+    usleep(rand()%(300000-50000+1)+50000); //50000 ms ile 3000000 ms arası
+}
+
+void* fonk_musteri(void* sayi)
+{
+
+    int s = *(int*)sayi + 1;
+    int oturulanSandalye,berber_kimlik;
+    sem_wait(&mutex); //koltuga oturmak için kilitle
+
+    printf(" %d. Musteri dukkana geldi.\n",s);
+
+	
+    //Bekleme odasında oturacak bos sandalye varsa
+
+    if(bosSandalyeSayisi>0)
+    {
+        bosSandalyeSayisi--; //bos sandalye sayisi azalt.
+
+        printf("Musteri %d bekleme salonunda beklemede.\n",s);
+        //bekleme salonundan sandalye seçip oturma
+        oturulacakSandalye = (++oturulacakSandalye) %sandalyeSayisi;
+        oturulanSandalye = oturulacakSandalye;
+        koltuk[oturulanSandalye]=s;
+
+        sem_post(&mutex); //koltuk erişim kilidi kalktı
+	printf(" %d. Musteri Berber uyandırdı...\n",s);	
+        sem_post(&berberler); //berber uyandır
+	
+	
+
+        sem_wait(&musteriler); //bekleyen musteri kuyruguna katılma
+        sem_wait(&mutex); //koltugu korumak için kilitle
+
+        //Berber koltuguna geçme
+        berber_kimlik = koltuk[oturulanSandalye];
+        bosSandalyeSayisi++; //berber koltuguna geçince bekleme salonu bos sandalye sayı arttı.
+
+        sem_post(&mutex); //koltuk kilidini kaldır.
+
+
+    }
+    else
+    {
+        sem_post(&mutex); //koltuk erişim kilidini kaldır
+        printf("%d. musteri bekleme salonunda yer bulamadi.Berberden Ayriliyor.\n",s);
+
+    }
+    pthread_exit(0);
+}
+
+void* fonk_berber(void* sayi)
+{
+
+    int s = *(int*) sayi +1;
+    int sonrakiMusteri,musteri_kimlik;
+
+    printf("%d. Berber Dukkana geldi.\n",s);
+
+    while(1)
+    {
+        if(!musteri_kimlik) //musteri yoksa...
+        {
+            printf("%d. berber Uyumaya gitti.\n",s);
+        }
+
+        sem_wait(&berberler); //Uyuyan berber kuyrugu
+        sem_wait(&mutex);  //koltuk erişimi kilitle
+
+        //sacı kesilecek musterinin bekleyenler arasından seçilmesi
+
+        hizmetMusteri = (++hizmetMusteri) %sandalyeSayisi;
+        sonrakiMusteri = hizmetMusteri;
+        musteri_kimlik = koltuk[sonrakiMusteri];
+        koltuk[sonrakiMusteri]= pthread_self();  //self fonksiyonuyla o an çalışan musteri bilgisi döndürüldü.
+
+        
+
+        printf("%d. Berber\t %d. Musterinin sacini kesmeye basladi\n",s,musteri_kimlik);
+        sleep(Kesme_MAX);
+        printf("%d.Berber\t %d. Musterinin sacini kesmeyi bitirdi.\n",s,musteri_kimlik);
+
+	sem_post(&mutex);		//koltuk erişimi açık kilit kalktı
+       					
+	sem_post(&musteriler);  //Koltuga oturan musteri sac kesilmesi.
+    }
+}
